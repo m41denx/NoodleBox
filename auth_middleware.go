@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"log"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -27,7 +28,7 @@ type AuthMiddleware struct {
 // NewAuthMiddleware returns new Middleware for Moodle Authentication and Sub Management
 func NewAuthMiddleware(website string) *AuthMiddleware {
 	// Initialize cache
-	db, err := pogreb.Open("sessions.db", nil)
+	db, err := pogreb.Open("sessions", nil)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -79,7 +80,7 @@ func (mid *AuthMiddleware) createSession(uname string, password string, useragen
 		// Get session and also check subscription status because why not
 		moodleSession, err := mid.GetMoodleSessionForCreds(noodleUser.Username, noodleUser.Password, useragent)
 		if err != nil {
-			return
+			return "", err
 		}
 		user.MoodleSession = moodleSession
 
@@ -170,6 +171,48 @@ func (mid *AuthMiddleware) GetMoodleSessionForCreds(uname string, password strin
 	return MoodleSess, nil
 }
 
-func (mid *AuthMiddleware) handle(c *fiber.Ctx) error {
+func (mid *AuthMiddleware) Handler(c *fiber.Ctx) error {
+	// There are 3 zones:
+	//   [ / ] is public
+	//   [ /login/ ] POST is for auth only
+	//   everything else needs authentication
 
+	// Check if session is present
+	session := c.Cookies("NoodleSession")
+	var user FastUserConfig
+	if len(session) > 0 {
+		// If cookie is set
+		user = mid.getUserBySession(session)
+		if len(user.Uname) == 0 {
+			// If session exists, we set appropriate cookie and proceed
+			c.Cookie(&fiber.Cookie{Name: "MoodleSession", Value: user.MoodleSession})
+			return c.Next()
+		}
+	}
+
+	// If we are trying to log in
+	if strings.HasPrefix(c.Path(), "/login/") && c.Method() == "POST" {
+		username := c.FormValue("username")
+		password := c.FormValue("password")
+		useragent := c.GetReqHeaders()["user-agent"]
+		if len(username) > 0 && len(password) > 0 {
+			noodleSession, err := mid.createSession(username, password, useragent)
+			BadgeVisibility := "none"
+			user := mid.getUserBySession(noodleSession)
+			if user.HasSubscription {
+				BadgeVisibility = "block"
+			}
+			if err == nil {
+				err = errors.New("Благодарим за использование наших услуг")
+			}
+			c.Cookie(&fiber.Cookie{Name: "NoodleSession", Value: noodleSession})
+			return c.Render("NoodleAuth", fiber.Map{
+				"Badge": BadgeVisibility,
+				"Msg":   err.Error(),
+			})
+		}
+	}
+
+	c.Set("X-CUST", "DasMe")
+	return c.Next()
 }
