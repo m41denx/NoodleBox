@@ -4,6 +4,7 @@ import (
 	"embed"
 	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/proxy"
 	"github.com/gofiber/template/html"
@@ -19,7 +20,7 @@ var Assets embed.FS
 
 var Ignore = []string{"image/png", "image/jpeg"}
 
-var URL = "127.0.0.1"
+var URL = "127.0.0.1:8080"
 
 // var URL = "vsu.noodlebox.ru"
 var Origin = "https://edu.vsu.ru"
@@ -50,6 +51,7 @@ func main() {
 		return nil
 	})
 	app.Use(PatchMiddlewareHandler)
+	app.Use(cors.New())
 	app.Listen(":8080")
 	//
 	//originServerURL, _ := url.Parse("https://edu.vsu.ru")

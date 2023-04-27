@@ -162,17 +162,17 @@ func (mid *AuthMiddleware) GetMoodleSessionForCreds(uname string, password strin
 
 	code, body, errs = c.Post(mid.website+"/login/index.php").
 		Form(data).Cookie("MoodleSession", LoginSess).
-		SetResponse(initResp).String()
+		SetResponse(resp).String()
 	if len(errs) > 0 {
 		return "", errs[0]
 	}
 	if code != 200 {
-		log.Println("MOODLE LOGIN(2) Not 200 WTF: ", code)
+		log.Println("MOODLE LOGIN(2) Not 200 WTF: ", code, string(resp.Header.Peek("Location")))
 	}
 
 	// Real MoodleSession that will be valid and returned to the client
 	cock = fasthttp.Cookie{}
-	cock.ParseBytes(initResp.Header.PeekCookie("MoodleSession"))
+	cock.ParseBytes(resp.Header.PeekCookie("MoodleSession"))
 	MoodleSess := string(cock.Value())
 	log.Println(MoodleSess)
 
@@ -187,6 +187,7 @@ func (mid *AuthMiddleware) HandlerBefore(c *fiber.Ctx) error {
 
 	// Check if session is present
 	session := c.Cookies("NoodleSession")
+	c.Request().Header.DelCookie("MoodleSession") // Just in case
 	var user FastUserConfig
 	if len(session) > 0 {
 		log.Println("Session OK", session, mid.cache.Count())
@@ -195,7 +196,7 @@ func (mid *AuthMiddleware) HandlerBefore(c *fiber.Ctx) error {
 		if len(user.Uname) > 0 {
 			log.Printf("%+v\n", user)
 			// If session exists, we set appropriate cookie and proceed
-			c.Cookie(&fiber.Cookie{Name: "MoodleSession", Value: user.MoodleSession})
+			c.Request().Header.SetCookie("MoodleSession", user.MoodleSession)
 			return c.Next()
 		}
 	}
