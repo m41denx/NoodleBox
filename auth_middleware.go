@@ -8,6 +8,7 @@ import (
 	"github.com/akrylysov/pogreb"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/valyala/fasthttp"
 	"log"
 	"regexp"
 	"strings"
@@ -137,7 +138,9 @@ func (mid *AuthMiddleware) GetMoodleSessionForCreds(uname string, password strin
 		log.Println("MOODLE LOGIN(1) Not 200 WTF")
 	}
 	// MoodleSession will be needed to authenticate
-	LoginSess := string(initResp.Header.PeekCookie("MoodleSession"))
+	cock := fasthttp.Cookie{}
+	cock.ParseBytes(initResp.Header.PeekCookie("MoodleSession"))
+	LoginSess := string(cock.Value())
 	//initResp.Header.VisitAllCookie()
 	log.Println(LoginSess)
 
@@ -168,7 +171,9 @@ func (mid *AuthMiddleware) GetMoodleSessionForCreds(uname string, password strin
 	}
 
 	// Real MoodleSession that will be valid and returned to the client
-	MoodleSess := string(initResp.Header.PeekCookie("MoodleSession"))
+	cock = fasthttp.Cookie{}
+	cock.ParseBytes(initResp.Header.PeekCookie("MoodleSession"))
+	MoodleSess := string(cock.Value())
 	log.Println(MoodleSess)
 
 	return MoodleSess, nil
