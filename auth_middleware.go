@@ -84,7 +84,7 @@ func (mid *AuthMiddleware) createSession(uname string, password string, useragen
 		}
 		user.MoodleSession = moodleSession
 
-		Subbed := (time.Now().UnixNano() - noodleUser.Subscription.UnixNano()) > 0
+		Subbed := (time.Now().UnixNano() - noodleUser.Subscription.UnixNano()) < 0
 		user.HasSubscription = Subbed
 	}
 
@@ -118,7 +118,7 @@ func (mid *AuthMiddleware) newUser(uname string, password string, useragent stri
 	return FastUserConfig{
 		Uname:           uname,
 		MoodleSession:   session,
-		HasSubscription: false, // Like man you just registered, ofc there is no subscription
+		HasSubscription: false, // Like man, you just registered, ofc there is no subscription
 	}, nil
 }
 
@@ -138,6 +138,8 @@ func (mid *AuthMiddleware) GetMoodleSessionForCreds(uname string, password strin
 	}
 	// MoodleSession will be needed to authenticate
 	LoginSess := string(initResp.Header.PeekCookie("MoodleSession"))
+	//initResp.Header.VisitAllCookie()
+	log.Println(LoginSess)
 
 	// Extract logintoken from login page (regex, capture groups)
 	preg := regexp.MustCompile("logintoken\".+value=\"(.+)\"")
@@ -167,11 +169,12 @@ func (mid *AuthMiddleware) GetMoodleSessionForCreds(uname string, password strin
 
 	// Real MoodleSession that will be valid and returned to the client
 	MoodleSess := string(initResp.Header.PeekCookie("MoodleSession"))
+	log.Println(MoodleSess)
 
 	return MoodleSess, nil
 }
 
-func (mid *AuthMiddleware) Handler(c *fiber.Ctx) error {
+func (mid *AuthMiddleware) HandlerBefore(c *fiber.Ctx) error {
 	// There are 3 zones:
 	//   [ / ] is public
 	//   [ /login/ ] POST is for auth only
@@ -181,9 +184,11 @@ func (mid *AuthMiddleware) Handler(c *fiber.Ctx) error {
 	session := c.Cookies("NoodleSession")
 	var user FastUserConfig
 	if len(session) > 0 {
+		log.Println("Session OK", session, mid.cache.Count())
 		// If cookie is set
 		user = mid.getUserBySession(session)
-		if len(user.Uname) == 0 {
+		if len(user.Uname) > 0 {
+			log.Printf("%+v\n", user)
 			// If session exists, we set appropriate cookie and proceed
 			c.Cookie(&fiber.Cookie{Name: "MoodleSession", Value: user.MoodleSession})
 			return c.Next()
@@ -198,21 +203,19 @@ func (mid *AuthMiddleware) Handler(c *fiber.Ctx) error {
 		if len(username) > 0 && len(password) > 0 {
 			noodleSession, err := mid.createSession(username, password, useragent)
 			BadgeVisibility := "none"
-			user := mid.getUserBySession(noodleSession)
+			user = mid.getUserBySession(noodleSession)
 			if user.HasSubscription {
 				BadgeVisibility = "block"
 			}
 			if err == nil {
 				err = errors.New("Благодарим за использование наших услуг")
 			}
-			c.Cookie(&fiber.Cookie{Name: "NoodleSession", Value: noodleSession})
-			return c.Render("NoodleAuth", fiber.Map{
+			c.Cookie(&fiber.Cookie{Name: "NoodleSession", Value: noodleSession, Path: "/", MaxAge: 2592000})
+			return c.Render("assets/AuthConfirmed", fiber.Map{
 				"Badge": BadgeVisibility,
 				"Msg":   err.Error(),
 			})
 		}
 	}
-
-	c.Set("X-CUST", "DasMe")
 	return c.Next()
 }

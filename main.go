@@ -4,6 +4,7 @@ import (
 	"embed"
 	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/proxy"
 	"github.com/gofiber/template/html"
 	"gorm.io/gorm"
@@ -18,17 +19,20 @@ var Assets embed.FS
 
 var Ignore = []string{"image/png", "image/jpeg"}
 
-var URL = "vsu.noodlebox.ru"
+var URL = "127.0.0.1"
+
+// var URL = "vsu.noodlebox.ru"
 var Origin = "https://edu.vsu.ru"
 
 func main() {
-	DB, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	var err error
+	DB, err = gorm.Open(sqlite.Open("amongus.db"), &gorm.Config{})
 	if err != nil {
 		log.Fatalln(err)
 	}
-	DB.AutoMigrate(new(User))
-	DB.AutoMigrate(new(Transaction))
+	log.Println(DB.AutoMigrate(&User{}), DB.AutoMigrate(&Transaction{}))
 
+	log.Println(Assets.ReadDir("assets"))
 	engine := html.NewFileSystem(http.FS(Assets), ".html")
 
 	app := fiber.New(fiber.Config{
@@ -36,17 +40,16 @@ func main() {
 	})
 
 	authMiddleware := NewAuthMiddleware(Origin)
-	app.Use(authMiddleware.Handler)
+	app.Use(logger.New())
+	app.Use(authMiddleware.HandlerBefore)
 	app.Use(func(c *fiber.Ctx) error {
 		// Inline middlewares
-		handler := proxy.Forward(Origin)
+		handler := proxy.Forward(Origin + c.OriginalURL())
 		handler(c)
-		log.Println("Yea")
-		c.Set("X-Amongus", "SUS")
+		c.Next()
 		return nil
 	})
-
-	log.Println("Listening")
+	app.Use(PatchMiddlewareHandler)
 	app.Listen(":8080")
 	//
 	//originServerURL, _ := url.Parse("https://edu.vsu.ru")
