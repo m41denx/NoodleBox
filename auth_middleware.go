@@ -22,8 +22,9 @@ type FastUserConfig struct {
 }
 
 type AuthMiddleware struct {
-	cache   *pogreb.DB //NoodleSession -> {Uname, MoodleSession, HasSubscription}
-	website string
+	cache         *pogreb.DB //NoodleSession -> {Uname, MoodleSession, HasSubscription}
+	website       string
+	sessionseeker map[string]string //uname -> noodlesession
 }
 
 // NewAuthMiddleware returns new Middleware for Moodle Authentication and Sub Management
@@ -35,8 +36,9 @@ func NewAuthMiddleware(website string) *AuthMiddleware {
 	}
 
 	return &AuthMiddleware{
-		cache:   db,
-		website: website,
+		cache:         db,
+		website:       website,
+		sessionseeker: make(map[string]string),
 	}
 }
 
