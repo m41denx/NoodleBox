@@ -1,4 +1,4 @@
-package main
+package models
 
 import (
 	"gorm.io/gorm"
@@ -12,6 +12,8 @@ type User struct {
 
 	Subscription time.Time // valid until
 	IsAdmin      bool
+
+	CustomCSS string
 }
 
 type Transaction struct {

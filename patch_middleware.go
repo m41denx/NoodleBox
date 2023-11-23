@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"github.com/cradio/NoodleBox/models"
 	"github.com/gofiber/fiber/v2"
 	"log"
 	"strings"
@@ -18,6 +19,13 @@ func PatchMiddlewareHandler(c *fiber.Ctx) error {
 	body = bytes.ReplaceAll(body, []byte("edu.vsu.ru"), []byte(URL))
 	body = bytes.ReplaceAll(body, []byte("https"), []byte("http"))
 
+	uname := ""
+	if c.Locals("uname") != nil {
+		uname = c.Locals("uname").(string)
+	}
+
+	body = bytes.ReplaceAll(body, []byte("</head>"), []byte("<link rel=\"stylesheet\" href=\"/_api/styles/"+uname+"\" /></head>"))
+
 	c.Response().Header.Del("Content-Encoding")
 	if pk := string(c.Response().Header.Peek("Location")); strings.Contains(pk, "edu.vsu.ru") {
 		log.Println(pk)
@@ -25,4 +33,11 @@ func PatchMiddlewareHandler(c *fiber.Ctx) error {
 	}
 	c.Send(body)
 	return c.Next()
+}
+
+func CustomStyles(c *fiber.Ctx) error {
+	usr := models.User{}
+	DB.Where(models.User{Username: c.Params("uname")}).First(&usr)
+	c.Set("Content-Type", "text/css")
+	return c.SendString(usr.CustomCSS)
 }

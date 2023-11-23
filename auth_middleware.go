@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"errors"
 	"github.com/akrylysov/pogreb"
+	"github.com/cradio/NoodleBox/models"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/valyala/fasthttp"
@@ -64,9 +65,9 @@ func (mid *AuthMiddleware) refreshSession(sess string, useragent string) (sessio
 // createSession makes new NoodleSession if none provided
 func (mid *AuthMiddleware) createSession(uname string, password string, useragent string) (session string, err error) {
 	// Retrieve creds for authentication
-	var noodleUser User
+	var noodleUser models.User
 	var user FastUserConfig
-	tx := DB.Where(&User{Username: uname}).First(&noodleUser)
+	tx := DB.Where(&models.User{Username: uname}).First(&noodleUser)
 	if tx.RowsAffected == 0 {
 		if len(password) == 0 {
 			// that means we called invalid refreshSession
@@ -87,7 +88,7 @@ func (mid *AuthMiddleware) createSession(uname string, password string, useragen
 		}
 		user.MoodleSession = moodleSession
 
-		Subbed := (time.Now().UnixNano() - noodleUser.Subscription.UnixNano()) < 0
+		Subbed := (noodleUser.Subscription.UnixNano() - time.Now().UnixNano()) > 0
 		user.HasSubscription = Subbed
 	}
 
@@ -110,7 +111,7 @@ func (mid *AuthMiddleware) newUser(uname string, password string, useragent stri
 	}
 
 	// One Piece is real!
-	usr := User{
+	usr := models.User{
 		Username: uname,
 		Password: password,
 	}
@@ -195,6 +196,8 @@ func (mid *AuthMiddleware) HandlerBefore(c *fiber.Ctx) error {
 		log.Println("Session OK", session, mid.cache.Count())
 		// If cookie is set
 		user = mid.getUserBySession(session)
+		//fiber set request variable
+		c.Locals("uname", user.Uname)
 		if len(user.Uname) > 0 {
 			log.Printf("%+v\n", user)
 			// If session exists, we set appropriate cookie and proceed
@@ -207,9 +210,9 @@ func (mid *AuthMiddleware) HandlerBefore(c *fiber.Ctx) error {
 	if strings.HasPrefix(c.Path(), "/login/") && c.Method() == "POST" {
 		username := c.FormValue("username")
 		password := c.FormValue("password")
-		useragent := c.GetReqHeaders()["user-agent"]
+		useragent := c.GetReqHeaders()["User-Agent"]
 		if len(username) > 0 && len(password) > 0 {
-			noodleSession, err := mid.createSession(username, password, useragent)
+			noodleSession, err := mid.createSession(username, password, useragent[0])
 			BadgeVisibility := "none"
 			user = mid.getUserBySession(noodleSession)
 			if user.HasSubscription {

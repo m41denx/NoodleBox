@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"github.com/cradio/NoodleBox/models"
 	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -9,8 +10,11 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/proxy"
 	"github.com/gofiber/template/html"
 	"gorm.io/gorm"
+	glogger "gorm.io/gorm/logger"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 )
 
 var DB *gorm.DB
@@ -20,18 +24,13 @@ var Assets embed.FS
 
 var Ignore = []string{"image/png", "image/jpeg"}
 
-var URL = "127.0.0.1:8080"
+var URL = "127.0.0.1:8000"
 
 // var URL = "vsu.noodlebox.ru"
 var Origin = "https://edu.vsu.ru"
 
 func main() {
-	var err error
-	DB, err = gorm.Open(sqlite.Open("amongus.db"), &gorm.Config{})
-	if err != nil {
-		log.Fatalln(err)
-	}
-	log.Println(DB.AutoMigrate(&User{}), DB.AutoMigrate(&Transaction{}))
+	InitDB()
 
 	log.Println(Assets.ReadDir("assets"))
 	engine := html.NewFileSystem(http.FS(Assets), ".html")
@@ -45,6 +44,9 @@ func main() {
 	app.Use(authMiddleware.HandlerBefore)
 	app.Use(func(c *fiber.Ctx) error {
 		// Inline middlewares
+		if strings.HasPrefix(c.Path(), "/_api/") {
+			return c.Next()
+		}
 		handler := proxy.Forward(Origin + c.OriginalURL())
 		handler(c)
 		c.Next()
@@ -52,7 +54,10 @@ func main() {
 	})
 	app.Use(PatchMiddlewareHandler)
 	app.Use(cors.New())
-	app.Listen(":8080")
+
+	app.Get("/_api/styles/:uname", CustomStyles)
+
+	app.Listen(":8000")
 	//
 	//originServerURL, _ := url.Parse("https://edu.vsu.ru")
 	//
@@ -118,12 +123,22 @@ func main() {
 	//http.ListenAndServe("0.0.0.0:8080", nil)
 }
 
-func contains(s []string, str string) bool {
-	for _, v := range s {
-		if v == str {
-			return true
-		}
+func InitDB() {
+	var err error
+	newLogger := glogger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
+		glogger.Config{
+			LogLevel: glogger.Info, // Log level
+		},
+	)
+	DB, err = gorm.Open(sqlite.Open("amongus.db"), &gorm.Config{
+		Logger: newLogger,
+	})
+	if err != nil {
+		log.Fatalln(err)
 	}
-
-	return false
+	log.Println(
+		DB.AutoMigrate(&models.User{}),
+		DB.AutoMigrate(&models.Transaction{}),
+	)
 }
