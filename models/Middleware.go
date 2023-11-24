@@ -11,5 +11,5 @@ type RouteHook struct {
 	Route      string
 	Method     string
 	SkipOrigin bool
-	Handler    func(c *fiber.Ctx, body []byte) error
+	Handler    func(c *fiber.Ctx, body *[]byte) error
 }

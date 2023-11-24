@@ -2,9 +2,12 @@ package main
 
 import (
 	"embed"
+	"fmt"
+	"github.com/cradio/NoodleBox/middlewares"
 	"github.com/cradio/NoodleBox/models"
 	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cache"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/proxy"
@@ -14,7 +17,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
+	"time"
 )
 
 var DB *gorm.DB
@@ -39,23 +42,54 @@ func main() {
 		Views: engine,
 	})
 
-	authMiddleware := NewAuthMiddleware(Origin)
+	mw := NewMiddlewareProvider(app)
 	app.Use(logger.New())
-	app.Use(authMiddleware.HandlerBefore)
-	app.Use(func(c *fiber.Ctx) error {
-		// Inline middlewares
-		if strings.HasPrefix(c.Path(), "/_api/") {
-			return c.Next()
-		}
+	app.Use(cors.New())
+
+	// Themes cache
+	app.Group("/theme/").Use(cache.New(cache.Config{
+		Expiration:  30 * time.Minute,
+		CacheHeader: "Noodle-Cache",
+		//CacheControl:         false,
+		Storage: NewCacheStorage(),
+		//StoreResponseHeaders: false,
+		MaxBytes: 1024 * 1024 * 1024 * 4, // 4GB
+	}))
+
+	// region API
+	api := app.Group("/_api")
+	api.Get("/styles/:uname", CustomStyles)
+	// endregion
+
+	// region Middlewares
+	authMiddleware := middlewares.NewAuthMiddleware(Origin, DB)
+	mw.RegisterMiddleware(authMiddleware)
+
+	mw.SetTarget(func(c *fiber.Ctx) error {
 		handler := proxy.Forward(Origin + c.OriginalURL())
-		handler(c)
+		fmt.Println("=>", c.OriginalURL())
+		if err := handler(c); err != nil {
+			log.Println(err)
+		}
 		c.Next()
 		return nil
 	})
-	app.Use(PatchMiddlewareHandler)
-	app.Use(cors.New())
+	// endregion
 
-	app.Get("/_api/styles/:uname", CustomStyles)
+	mw.RegisterRoutes()
+
+	//app.Use(authMiddleware.HandlerBefore)
+	//app.Use(func(c *fiber.Ctx) error {
+	//	// Inline middlewares
+	//	if strings.HasPrefix(c.Path(), "/_api/") {
+	//		return c.Next()
+	//	}
+	//	handler := proxy.Forward(Origin + c.OriginalURL())
+	//	handler(c)
+	//	c.Next()
+	//	return nil
+	//})
+	app.Use(PatchMiddlewareHandler)
 
 	app.Listen(":8000")
 	//

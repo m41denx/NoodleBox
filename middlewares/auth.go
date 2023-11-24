@@ -1,4 +1,4 @@
-package main
+package middlewares
 
 import (
 	"bytes"
@@ -10,26 +10,22 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/valyala/fasthttp"
+	"gorm.io/gorm"
 	"log"
 	"regexp"
-	"strings"
 	"time"
 )
 
-type FastUserConfig struct {
-	Uname           string
-	MoodleSession   string
-	HasSubscription bool
-}
-
+// AuthMiddleware allows seamless authorization independent of device
 type AuthMiddleware struct {
+	db            *gorm.DB
 	cache         *pogreb.DB //NoodleSession -> {Uname, MoodleSession, HasSubscription}
 	website       string
 	sessionseeker map[string]string //uname -> noodlesession
 }
 
 // NewAuthMiddleware returns new Middleware for Moodle Authentication and Sub Management
-func NewAuthMiddleware(website string) *AuthMiddleware {
+func NewAuthMiddleware(website string, gormDB *gorm.DB) *AuthMiddleware {
 	// Initialize cache
 	db, err := pogreb.Open("sessions", nil)
 	if err != nil {
@@ -37,11 +33,49 @@ func NewAuthMiddleware(website string) *AuthMiddleware {
 	}
 
 	return &AuthMiddleware{
+		db:            gormDB,
 		cache:         db,
 		website:       website,
 		sessionseeker: make(map[string]string),
 	}
 }
+
+// region Hooks
+
+func (mid *AuthMiddleware) GetIngressHooks() []*models.RouteHook {
+	return []*models.RouteHook{
+		{
+			Route:      "/login/.*",
+			Method:     "POST",
+			SkipOrigin: true,
+			Handler:    mid.HandlerAuth,
+		},
+		{
+			Route:      "/.*",
+			Method:     "*",
+			SkipOrigin: false,
+			Handler:    mid.HandlerBefore,
+		},
+	}
+}
+
+func (mid *AuthMiddleware) GetEgressHooks() []*models.RouteHook {
+	return []*models.RouteHook{}
+}
+
+//endregion
+
+// region Inlines
+
+type FastUserConfig struct {
+	Uname           string
+	MoodleSession   string
+	HasSubscription bool
+}
+
+// endregion
+
+// region AuthMiddleware Internals
 
 // getUserBySession returns FastUserConfig (empty if none found)
 func (mid *AuthMiddleware) getUserBySession(sess string) FastUserConfig {
@@ -67,7 +101,7 @@ func (mid *AuthMiddleware) createSession(uname string, password string, useragen
 	// Retrieve creds for authentication
 	var noodleUser models.User
 	var user FastUserConfig
-	tx := DB.Where(&models.User{Username: uname}).First(&noodleUser)
+	tx := mid.db.Where(&models.User{Username: uname}).First(&noodleUser)
 	if tx.RowsAffected == 0 {
 		if len(password) == 0 {
 			// that means we called invalid refreshSession
@@ -115,7 +149,7 @@ func (mid *AuthMiddleware) newUser(uname string, password string, useragent stri
 		Username: uname,
 		Password: password,
 	}
-	tx := DB.Create(&usr)
+	tx := mid.db.Create(&usr)
 	if err = tx.Error; err != nil {
 		return
 	}
@@ -182,7 +216,9 @@ func (mid *AuthMiddleware) GetMoodleSessionForCreds(uname string, password strin
 	return MoodleSess, nil
 }
 
-func (mid *AuthMiddleware) HandlerBefore(c *fiber.Ctx) error {
+// endregion
+
+func (mid *AuthMiddleware) HandlerBefore(c *fiber.Ctx, body *[]byte) error {
 	// There are 3 zones:
 	//   [ / ] is public
 	//   [ /login/ ] POST is for auth only
@@ -202,31 +238,35 @@ func (mid *AuthMiddleware) HandlerBefore(c *fiber.Ctx) error {
 			log.Printf("%+v\n", user)
 			// If session exists, we set appropriate cookie and proceed
 			c.Request().Header.SetCookie("MoodleSession", user.MoodleSession)
-			return c.Next()
+			return nil
 		}
 	}
+	return nil
+}
 
+func (mid *AuthMiddleware) HandlerAuth(c *fiber.Ctx, body *[]byte) error {
 	// If we are trying to log in
-	if strings.HasPrefix(c.Path(), "/login/") && c.Method() == "POST" {
-		username := c.FormValue("username")
-		password := c.FormValue("password")
-		useragent := c.GetReqHeaders()["User-Agent"]
-		if len(username) > 0 && len(password) > 0 {
-			noodleSession, err := mid.createSession(username, password, useragent[0])
-			BadgeVisibility := "none"
-			user = mid.getUserBySession(noodleSession)
-			if user.HasSubscription {
-				BadgeVisibility = "block"
-			}
-			if err == nil {
-				err = errors.New("Благодарим за использование наших услуг")
-			}
-			c.Cookie(&fiber.Cookie{Name: "NoodleSession", Value: noodleSession, Path: "/", MaxAge: 2592000})
-			return c.Render("assets/AuthConfirmed", fiber.Map{
-				"Badge": BadgeVisibility,
-				"Msg":   err.Error(),
-			})
-		}
+	username := c.FormValue("username")
+	password := c.FormValue("password")
+	useragent := c.GetReqHeaders()["User-Agent"]
+	if len(useragent) == 0 {
+		useragent = []string{"NoodleBox/Hasty Mozilla/5.0 (Hasty) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.207.132.170 Safari/537.36"}
 	}
-	return c.Next()
+	if len(username) > 0 && len(password) > 0 {
+		noodleSession, err := mid.createSession(username, password, useragent[0])
+		BadgeVisibility := "none"
+		user := mid.getUserBySession(noodleSession)
+		if user.HasSubscription {
+			BadgeVisibility = "block"
+		}
+		if err == nil {
+			err = errors.New("Благодарим за использование наших услуг")
+		}
+		c.Cookie(&fiber.Cookie{Name: "NoodleSession", Value: noodleSession, Path: "/", MaxAge: 2592000})
+		return c.Render("assets/AuthConfirmed", fiber.Map{
+			"Badge": BadgeVisibility,
+			"Msg":   err.Error(),
+		})
+	}
+	return nil
 }
