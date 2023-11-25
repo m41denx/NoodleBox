@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 	"log"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -60,7 +61,14 @@ func (mid *AuthMiddleware) GetIngressHooks() []*models.RouteHook {
 }
 
 func (mid *AuthMiddleware) GetEgressHooks() []*models.RouteHook {
-	return []*models.RouteHook{}
+	return []*models.RouteHook{
+		{
+			Route:      "/.*",
+			Method:     "*",
+			SkipOrigin: false,
+			Handler:    mid.HandlerAfter,
+		},
+	}
 }
 
 //endregion
@@ -89,11 +97,52 @@ func (mid *AuthMiddleware) getUserBySession(sess string) FastUserConfig {
 }
 
 func (mid *AuthMiddleware) refreshSession(sess string, useragent string) (session string, err error) {
-	usr := mid.getUserBySession(sess)
-	if len(usr.Uname) == 0 {
+	user := mid.getUserBySession(sess)
+	if len(user.Uname) == 0 {
 		return "", errors.New("no cached user")
 	}
-	return mid.createSession(usr.Uname, "", useragent)
+	var noodleUser models.User
+	tx := mid.db.Where(&models.User{Username: user.Uname}).First(&noodleUser)
+	if tx.RowsAffected == 0 {
+		return "", errors.New("no cached user")
+	}
+	moodSess, err := mid.GetMoodleSessionForCreds(noodleUser.Username, noodleUser.Password, useragent)
+	if err != nil {
+		return "", err
+	}
+	user.MoodleSession = moodSess
+	buf := bytes.NewBuffer(nil)
+	if err = gob.NewEncoder(buf).Encode(user); err != nil {
+		return
+	}
+	return sess, mid.cache.Put([]byte(sess), buf.Bytes())
+}
+
+func (mid *AuthMiddleware) doAuth(uname string, password string, useragent string) (session string, err error) {
+	var noodleUser models.User
+	tx := mid.db.Where(&models.User{Username: uname}).First(&noodleUser)
+	if tx.RowsAffected == 0 {
+		// Fresh user
+		return mid.createSession(uname, password, useragent)
+	}
+	if noodleUser.Password == password {
+		// Valid password
+		sess, ok := mid.sessionseeker[uname]
+		if !ok {
+			// No NoodleSession
+			return mid.createSession(uname, password, useragent)
+		}
+		usr := mid.getUserBySession(sess)
+		if usr.Uname == "" {
+			return "", errors.New("no cached user")
+		}
+		if mid.isSessionExpired(usr.MoodleSession, useragent) {
+			return mid.refreshSession(sess, useragent)
+		}
+		return sess, nil
+	}
+	// Invalid password or user changed password or idk
+	return mid.createSession(uname, password, useragent)
 }
 
 // createSession makes new NoodleSession if none provided
@@ -133,7 +182,50 @@ func (mid *AuthMiddleware) createSession(uname string, password string, useragen
 	if err = gob.NewEncoder(buf).Encode(user); err != nil {
 		return
 	}
+	mid.sessionseeker[uname] = session
 	return session, mid.cache.Put([]byte(session), buf.Bytes())
+}
+
+func (mid *AuthMiddleware) isSessionExpired(moodleSession string, useragent string) bool {
+	c := fiber.AcquireClient()
+	c.UserAgent = useragent
+
+	// Get initial MoodleSession and logintoken
+	initResp := fiber.AcquireResponse()
+	defer fiber.ReleaseResponse(initResp)
+	a := c.Get(mid.website+"/user/preferences.php").Cookie("MoodleSession", moodleSession)
+	if err := a.Do(a.Request(), initResp); err != nil {
+		log.Println(err)
+		return true
+	}
+	loc := initResp.Header.Peek("Location")
+	if loc != nil && string(loc) == "https://edu.vsu.ru/login/index.php" {
+		return true
+	}
+	return false
+}
+
+func (mid *AuthMiddleware) getSessKey(moodleSession string, useragent string) string {
+	c := fiber.AcquireClient()
+	c.UserAgent = useragent
+
+	// Get initial MoodleSession and logintoken
+	initResp := fiber.AcquireResponse()
+	defer fiber.ReleaseResponse(initResp)
+	code, body, err := c.Get(mid.website+"/user/preferences.php").Cookie("MoodleSession", moodleSession).String()
+	if err != nil {
+		log.Println(err)
+		return ""
+	}
+	if code != 200 {
+		return ""
+	}
+	preg := regexp.MustCompile("sesskey\":\"(.+)\"")
+	found := preg.FindStringSubmatch(body)
+	if len(found) < 2 {
+		return ""
+	}
+	return found[1]
 }
 
 // newUser creates new user for Noodle system and retrieves MoodleSession
@@ -178,8 +270,6 @@ func (mid *AuthMiddleware) GetMoodleSessionForCreds(uname string, password strin
 	cock := fasthttp.Cookie{}
 	cock.ParseBytes(initResp.Header.PeekCookie("MoodleSession"))
 	LoginSess := string(cock.Value())
-	//initResp.Header.VisitAllCookie()
-	log.Println(LoginSess)
 
 	// Extract logintoken from login page (regex, capture groups)
 	preg := regexp.MustCompile("logintoken\".+value=\"(.+)\"")
@@ -189,6 +279,8 @@ func (mid *AuthMiddleware) GetMoodleSessionForCreds(uname string, password strin
 	}
 	LoginToken := found[1]
 
+	log.Println("=== Fetched login page", LoginSess, LoginToken)
+
 	// Attempt login with provided creds and newly obtained logintoken
 	resp := fiber.AcquireResponse()
 	defer fiber.ReleaseResponse(resp)
@@ -197,9 +289,10 @@ func (mid *AuthMiddleware) GetMoodleSessionForCreds(uname string, password strin
 	data.Set("username", uname)
 	data.Set("password", password)
 
-	code, body, errs = c.Post(mid.website+"/login/index.php").
+	code, _, errs = c.Post(mid.website+"/login/index.php").
 		Form(data).Cookie("MoodleSession", LoginSess).
 		SetResponse(resp).String()
+	log.Println("===", data.String(), LoginSess)
 	if len(errs) > 0 {
 		return "", errs[0]
 	}
@@ -224,6 +317,10 @@ func (mid *AuthMiddleware) HandlerBefore(c *fiber.Ctx, body *[]byte) error {
 	//   [ /login/ ] POST is for auth only
 	//   everything else needs authentication
 
+	if c.Path() == "/login/index.php" {
+		return nil
+	}
+
 	// Check if session is present
 	session := c.Cookies("NoodleSession")
 	c.Request().Header.DelCookie("MoodleSession") // Just in case
@@ -244,16 +341,44 @@ func (mid *AuthMiddleware) HandlerBefore(c *fiber.Ctx, body *[]byte) error {
 	return nil
 }
 
+func (mid *AuthMiddleware) HandlerAfter(c *fiber.Ctx, body *[]byte) error {
+	loc := string(c.Response().Header.Peek("Location"))
+	att := c.Locals("relogin_att")
+	attx := ""
+	if att != nil {
+		attx = att.(string)
+	}
+	log.Println("PATH", c.Path())
+	if strings.HasSuffix(loc, "/login/index.php") && len(attx) == 0 {
+		c.Response().Reset()
+		// Looks like moodleSession expired
+		session := c.Cookies("NoodleSession")
+		useragent := c.GetReqHeaders()["User-Agent"]
+		if len(useragent) == 0 {
+			useragent = []string{"NoodleBox/Hasty Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.207.132.170 Safari/537.36"}
+		}
+		_, err := mid.refreshSession(session, useragent[0])
+		if err != nil {
+			log.Println(err)
+		}
+		c.Locals("relogin_att", "yes")
+		return c.RestartRouting()
+	}
+	// Everything is fine (probably)
+
+	return nil
+}
+
 func (mid *AuthMiddleware) HandlerAuth(c *fiber.Ctx, body *[]byte) error {
 	// If we are trying to log in
 	username := c.FormValue("username")
 	password := c.FormValue("password")
 	useragent := c.GetReqHeaders()["User-Agent"]
 	if len(useragent) == 0 {
-		useragent = []string{"NoodleBox/Hasty Mozilla/5.0 (Hasty) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.207.132.170 Safari/537.36"}
+		useragent = []string{"NoodleBox/Hasty Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.207.132.170 Safari/537.36"}
 	}
 	if len(username) > 0 && len(password) > 0 {
-		noodleSession, err := mid.createSession(username, password, useragent[0])
+		noodleSession, err := mid.doAuth(username, password, useragent[0])
 		BadgeVisibility := "none"
 		user := mid.getUserBySession(noodleSession)
 		if user.HasSubscription {

@@ -17,7 +17,9 @@ func PatchMiddlewareHandler(c *fiber.Ctx) error {
 
 	body = bytes.ReplaceAll(body, []byte("https://edu.vsu.ru/"), []byte("/"))
 	body = bytes.ReplaceAll(body, []byte("edu.vsu.ru"), []byte(URL))
-	body = bytes.ReplaceAll(body, []byte("https"), []byte("http"))
+	if URL == "127.0.0.1:8000" {
+		body = bytes.ReplaceAll(body, []byte("https"), []byte("http"))
+	}
 
 	uname := ""
 	if c.Locals("uname") != nil {
@@ -28,9 +30,12 @@ func PatchMiddlewareHandler(c *fiber.Ctx) error {
 
 	c.Response().Header.Del("Content-Encoding")
 	if pk := string(c.Response().Header.Peek("Location")); strings.Contains(pk, "edu.vsu.ru") {
-		log.Println(pk)
+		log.Println("LOC", pk)
 		c.Response().Header.Set("Location", strings.ReplaceAll(pk, "https://edu.vsu.ru/", "/"))
 	}
+	//if c.Path() == "/login/index.php" {
+	//	c.Response().Header.Del("Location")
+	//}
 	c.Send(body)
 	return c.Next()
 }

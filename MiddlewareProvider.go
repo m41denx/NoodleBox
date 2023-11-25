@@ -49,11 +49,9 @@ func wrap(hook *models.RouteHook) fiber.Handler {
 			fmt.Sprintf("^%s$", hook.Route),
 			c.Path(),
 		); !b {
-			fmt.Println("Skipped", hook.Route, c.Path())
 			return c.Next()
 		}
 		if c.Method() != hook.Method && hook.Method != "*" {
-			fmt.Println("Skipped", hook.Method, c.Method())
 			return c.Next()
 		}
 

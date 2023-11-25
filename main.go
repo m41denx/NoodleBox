@@ -11,12 +11,14 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/proxy"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/template/html"
 	"gorm.io/gorm"
 	glogger "gorm.io/gorm/logger"
 	"log"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"time"
 )
 
@@ -27,7 +29,7 @@ var Assets embed.FS
 
 var Ignore = []string{"image/png", "image/jpeg"}
 
-var URL = "127.0.0.1:8000"
+var URL = GetEnv("URL", "127.0.0.1:8000")
 
 // var URL = "vsu.noodlebox.ru"
 var Origin = "https://edu.vsu.ru"
@@ -45,16 +47,24 @@ func main() {
 	mw := NewMiddlewareProvider(app)
 	app.Use(logger.New())
 	app.Use(cors.New())
+	app.Use(recover.New(recover.Config{
+		StackTraceHandler: func(c *fiber.Ctx, e interface{}) {
+			log.Println("\n\n\n\n", string(debug.Stack()))
+		},
+		EnableStackTrace: true,
+	}))
 
-	// Themes cache
-	app.Group("/theme/").Use(cache.New(cache.Config{
+	// Static cache
+	cacher := cache.New(cache.Config{
 		Expiration:  30 * time.Minute,
 		CacheHeader: "Noodle-Cache",
 		//CacheControl:         false,
 		Storage: NewCacheStorage(),
 		//StoreResponseHeaders: false,
 		MaxBytes: 1024 * 1024 * 1024 * 4, // 4GB
-	}))
+	})
+	app.Group("/theme/").Use(cacher)
+	app.Group("/npm/").Use(cacher)
 
 	// region API
 	api := app.Group("/_api")
@@ -67,10 +77,11 @@ func main() {
 
 	mw.SetTarget(func(c *fiber.Ctx) error {
 		handler := proxy.Forward(Origin + c.OriginalURL())
-		fmt.Println("=>", c.OriginalURL())
+		fmt.Println("=>", Origin+c.OriginalURL())
 		if err := handler(c); err != nil {
 			log.Println(err)
 		}
+		fmt.Println("=>", c.Response().StatusCode(), string(c.Response().Header.Peek("Location")))
 		c.Next()
 		return nil
 	})
