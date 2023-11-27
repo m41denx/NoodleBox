@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/akrylysov/pogreb"
 	"github.com/cradio/NoodleBox/models"
+	"github.com/cradio/NoodleBox/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/valyala/fasthttp"
@@ -220,7 +221,7 @@ func (mid *AuthMiddleware) getSessKey(moodleSession string, useragent string) st
 	if code != 200 {
 		return ""
 	}
-	preg := regexp.MustCompile("sesskey\":\"(.+)\"")
+	preg := regexp.MustCompile("sesskey\":\"([a-zA-Z0-9]+)\"")
 	found := preg.FindStringSubmatch(body)
 	if len(found) < 2 {
 		return ""
@@ -321,6 +322,8 @@ func (mid *AuthMiddleware) HandlerBefore(c *fiber.Ctx, body *[]byte) error {
 		return nil
 	}
 
+	c.Locals("metrics").(*utils.GoMetrics).NewStep("SessionPatcher")
+
 	// Check if session is present
 	session := c.Cookies("NoodleSession")
 	c.Request().Header.DelCookie("MoodleSession") // Just in case
@@ -335,6 +338,8 @@ func (mid *AuthMiddleware) HandlerBefore(c *fiber.Ctx, body *[]byte) error {
 			log.Printf("%+v\n", user)
 			// If session exists, we set appropriate cookie and proceed
 			c.Request().Header.SetCookie("MoodleSession", user.MoodleSession)
+
+			//c.Locals("sess_id", mid.getSessKey(user.MoodleSession, "NoodleBox/Hasty Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.207.132.170 Safari/537.36"))
 			return nil
 		}
 	}
@@ -342,6 +347,7 @@ func (mid *AuthMiddleware) HandlerBefore(c *fiber.Ctx, body *[]byte) error {
 }
 
 func (mid *AuthMiddleware) HandlerAfter(c *fiber.Ctx, body *[]byte) error {
+	c.Locals("metrics").(*utils.GoMetrics).NewStep("SessionRefresher")
 	loc := string(c.Response().Header.Peek("Location"))
 	att := c.Locals("relogin_att")
 	attx := ""
@@ -370,6 +376,7 @@ func (mid *AuthMiddleware) HandlerAfter(c *fiber.Ctx, body *[]byte) error {
 }
 
 func (mid *AuthMiddleware) HandlerAuth(c *fiber.Ctx, body *[]byte) error {
+	c.Locals("metrics").(*utils.GoMetrics).NewStep("Auth")
 	// If we are trying to log in
 	username := c.FormValue("username")
 	password := c.FormValue("password")
@@ -385,7 +392,7 @@ func (mid *AuthMiddleware) HandlerAuth(c *fiber.Ctx, body *[]byte) error {
 			BadgeVisibility = "block"
 		}
 		if err == nil {
-			err = errors.New("Благодарим за использование наших услуг")
+			err = errors.New("С возвращением!")
 		}
 		c.Cookie(&fiber.Cookie{Name: "NoodleSession", Value: noodleSession, Path: "/", MaxAge: 2592000})
 		return c.Render("assets/AuthConfirmed", fiber.Map{

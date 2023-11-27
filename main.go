@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/cradio/NoodleBox/middlewares"
 	"github.com/cradio/NoodleBox/models"
+	"github.com/cradio/NoodleBox/utils"
 	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cache"
@@ -29,7 +30,7 @@ var Assets embed.FS
 
 var Ignore = []string{"image/png", "image/jpeg"}
 
-var URL = GetEnv("URL", "127.0.0.1:8000")
+var URL = utils.GetEnv("URL", "127.0.0.1:8000")
 
 // var URL = "vsu.noodlebox.ru"
 var Origin = "https://edu.vsu.ru"
@@ -54,22 +55,52 @@ func main() {
 		EnableStackTrace: true,
 	}))
 
+	app.Use(func(c *fiber.Ctx) error {
+		// Inject metrics
+		metrics := utils.NewGoMetrics()
+		c.Locals("metrics", metrics)
+		return c.Next()
+	})
+
 	// Static cache
 	cacher := cache.New(cache.Config{
-		Expiration:  30 * time.Minute,
-		CacheHeader: "Noodle-Cache",
-		//CacheControl:         false,
-		Storage: NewCacheStorage(),
+		Expiration:   30 * time.Minute,
+		CacheHeader:  "Noodle-Cache",
+		CacheControl: false,
+		Storage:      NewCacheStorage(),
 		//StoreResponseHeaders: false,
 		MaxBytes: 1024 * 1024 * 1024 * 4, // 4GB
 	})
-	app.Group("/theme/").Use(cacher)
-	app.Group("/npm/").Use(cacher)
+	app.Group("/theme/").
+		Use(func(c *fiber.Ctx) error {
+			c.Locals("metrics").(*utils.GoMetrics).NewStep("Cache Fetch")
+			return c.Next()
+		}).
+		Use(cacher).
+		Use(func(c *fiber.Ctx) error {
+			c.Locals("metrics").(*utils.GoMetrics).NewStep("Later")
+			return c.Next()
+		})
+	app.Group("/npm/").
+		Use(func(c *fiber.Ctx) error {
+			c.Locals("metrics").(*utils.GoMetrics).NewStep("Cache Fetch")
+			return c.Next()
+		}).
+		Use(cacher).
+		Use(func(c *fiber.Ctx) error {
+			c.Locals("metrics").(*utils.GoMetrics).NewStep("Later")
+			return c.Next()
+		})
 
 	// region API
 	api := app.Group("/_api")
-	api.Get("/styles/:uname", CustomStyles)
+	api.Get("/styles/:uname", CustomStyles) // There is passthrough leak to https://edu.vsu.ru/_api/styles/
+
 	// endregion
+
+	app.All("/blocks/accessibility/userstyles.php", func(ctx *fiber.Ctx) error {
+		return nil
+	})
 
 	// region Middlewares
 	authMiddleware := middlewares.NewAuthMiddleware(Origin, DB)
@@ -101,6 +132,14 @@ func main() {
 	//	return nil
 	//})
 	app.Use(PatchMiddlewareHandler)
+
+	app.Use(func(c *fiber.Ctx) error {
+		m := c.Locals("metrics").(*utils.GoMetrics)
+		m.Done()
+		c.Set("X-Trace", m.DumpTextInline())
+		fmt.Println(m.DumpText())
+		return nil // Make sure nothing comes next
+	})
 
 	app.Listen(":8000")
 	//

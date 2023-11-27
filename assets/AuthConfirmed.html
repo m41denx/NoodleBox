@@ -33,15 +33,6 @@
                 margin-top: -1rem;
                 font-size: 16pt;
             }
-            a{
-                padding: .5rem 2rem;
-                background-color: #0d6efd;
-                color: white;
-                border-radius: 8px;
-                text-decoration: none;
-                font-size: 16pt;
-                margin-top: 1rem;
-            }
 
             .badge {
                 font-size: 12pt;
@@ -52,6 +43,28 @@
                 border-radius: 8px;
                 margin-left: 1rem;
                 display: {{.Badge}};
+            }
+
+            a {
+                border-radius: .75rem;
+                border-width: 2px;
+                border-color: #faecda;
+                border-style: solid;
+                background-color: #E3DED5;
+                padding: .65rem 2rem;
+                color: black;
+                text-decoration: none;
+                font-size: 16pt;
+                margin-top: 1rem;
+                filter: drop-shadow(0 10px 8px rgb(0 0 0 / 0.04)) drop-shadow(0 4px 3px rgb(0 0 0 / 0.1));
+                transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+                transition-duration: 300ms;
+                transition-property: all;
+            }
+            a:hover {
+                background-color: #faecda;
+                border-color: white;
+                filter: drop-shadow(0 25px 25px rgb(0 0 0 / 0.15));
             }
             
             @media screen and (max-width: 400px) {

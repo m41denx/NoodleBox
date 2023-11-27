@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/cradio/NoodleBox/models"
+	"github.com/cradio/NoodleBox/utils"
 	"github.com/gofiber/fiber/v2"
 	"regexp"
 )
@@ -45,6 +46,7 @@ func (m *MiddlewareProvider) RegisterRoutes() {
 func wrap(hook *models.RouteHook) fiber.Handler {
 	fmt.Println("Wrapped", hook.Route, hook.Method)
 	return func(c *fiber.Ctx) error {
+		c.Locals("metrics").(*utils.GoMetrics).NewStep("RegexRouting")
 		if b, _ := regexp.MatchString(
 			fmt.Sprintf("^%s$", hook.Route),
 			c.Path(),
@@ -55,7 +57,7 @@ func wrap(hook *models.RouteHook) fiber.Handler {
 			return c.Next()
 		}
 
-		fmt.Println("Running", hook.Route, hook.Method, hook.SkipOrigin)
+		//fmt.Println("Running", hook.Route, hook.Method, hook.SkipOrigin)
 
 		r := hook.Handler(c, nil)
 		if hook.SkipOrigin {
